@@ -43,6 +43,18 @@ export function Sessions() {
     ),
   });
 
+  const fetchSessions = async () => {
+    try {
+      setLoading(true);
+      const data = await sessionApi.list();
+      setSessions(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load sessions');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchSessions();
   }, []);
@@ -84,18 +96,6 @@ export function Sessions() {
       }
     };
   }, [qrData, fetchQR]);
-
-  const fetchSessions = async () => {
-    try {
-      setLoading(true);
-      const data = await sessionApi.list();
-      setSessions(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load sessions');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleCreate = async () => {
     if (!newSessionName.trim()) return;
