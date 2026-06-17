@@ -4,33 +4,38 @@ jest.mock('../../../engine/adapters/whatsapp-web-js.adapter', () => ({
 
 import { WhatsAppWebJsPlugin } from './index';
 import { WhatsAppWebJsAdapter } from '../../../engine/adapters/whatsapp-web-js.adapter';
+import { PluginContext } from '../../../core/plugins';
 
-describe('WhatsAppWebJsPlugin.createEngine (#219)', () => {
+describe('WhatsAppWebJsPlugin.createEngine (opaque config)', () => {
   beforeEach(() => {
     (WhatsAppWebJsAdapter as unknown as jest.Mock).mockClear();
   });
 
-  it('prefers per-call config over context/defaults and threads executablePath', () => {
-    const plugin = new WhatsAppWebJsPlugin();
+  function withContext(plugin: WhatsAppWebJsPlugin, config: Record<string, unknown>): void {
+    // onLoad sets this.context synchronously; the returned promise can be ignored here.
+    void plugin.onLoad({ config, logger: { log: jest.fn() } } as unknown as PluginContext);
+  }
 
-    plugin.createEngine({
-      sessionId: 'sess-1',
+  it('reads browser config from context.config (the opaque engine blob), not per-call', () => {
+    const plugin = new WhatsAppWebJsPlugin();
+    withContext(plugin, {
       sessionDataPath: '/data/sessions',
-      headless: false,
-      puppeteerArgs: ['--single-process'],
-      executablePath: '/usr/bin/chromium',
+      puppeteer: { headless: false, args: ['--single-process'], executablePath: '/usr/bin/chromium' },
     });
+
+    plugin.createEngine({ sessionId: 'sess-1', proxyUrl: 'http://p', proxyType: 'http' });
 
     expect(WhatsAppWebJsAdapter).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 'sess-1',
         sessionDataPath: '/data/sessions',
         puppeteer: { headless: false, args: ['--single-process'], executablePath: '/usr/bin/chromium' },
+        proxy: { url: 'http://p', type: 'http' },
       }),
     );
   });
 
-  it('falls back to safe defaults when no config is supplied', () => {
+  it('falls back to safe defaults when context has no config', () => {
     const plugin = new WhatsAppWebJsPlugin();
 
     plugin.createEngine({ sessionId: 'sess-2' });

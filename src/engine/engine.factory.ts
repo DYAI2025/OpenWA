@@ -42,7 +42,9 @@ export class EngineFactory implements OnModuleInit {
     };
 
     const wwjsPlugin = new WhatsAppWebJsPlugin();
-    this.pluginLoader.registerBuiltInPlugin(wwjsManifest, wwjsPlugin);
+    // Supply the engine config sub-tree (engine.* from configuration.ts) as an opaque blob;
+    // the plugin reads its own namespace (puppeteer.*, sessionDataPath) from context.config.
+    this.pluginLoader.registerBuiltInPlugin(wwjsManifest, wwjsPlugin, this.configService.get('engine') ?? {});
 
     // Auto-enable the configured engine
     try {
@@ -65,20 +67,13 @@ export class EngineFactory implements OnModuleInit {
     const enginePlugin = this.pluginLoader.getPlugin(this.engineType);
 
     if (enginePlugin?.instance && this.isEnginePlugin(enginePlugin.instance)) {
+      // Engine-neutral per-call config only. Engine-specific config (e.g. Puppeteer for
+      // whatsapp-web.js) is supplied to the plugin as an opaque blob via context.config at
+      // registration, so the factory never assembles browser-shaped fields.
       return enginePlugin.instance.createEngine({
         sessionId: options.sessionId,
         proxyUrl: options.proxyUrl,
         proxyType: options.proxyType,
-        // Resolve engine runtime config here (the built-in plugin registers with an
-        // empty context config) so sessionDataPath / puppeteer settings honour the
-        // environment instead of falling back to relative-path defaults.
-        sessionDataPath: this.configService.get<string>('engine.sessionDataPath') ?? './data/sessions',
-        headless: this.configService.get<boolean>('engine.puppeteer.headless') ?? true,
-        puppeteerArgs: this.configService.get<string[]>('engine.puppeteer.args') ?? [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-        ],
-        executablePath: this.configService.get<string>('engine.puppeteer.executablePath'),
       }) as IWhatsAppEngine;
     }
 

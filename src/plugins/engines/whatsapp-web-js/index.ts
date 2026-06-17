@@ -29,24 +29,21 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
 
   createEngine(config: Record<string, unknown>): IWhatsAppEngine {
     const sessionId = config.sessionId as string;
-    // Prefer the per-call config resolved by EngineFactory (from ConfigService);
-    // fall back to any plugin-level context config, then to safe defaults. The
-    // built-in plugin registers with an empty context config, so without the
-    // per-call values sessionDataPath/headless/executablePath would silently
-    // fall back to relative-path defaults and ignore the environment.
-    const sessionDataPath =
-      (config.sessionDataPath as string | undefined) ??
-      (this.context?.config.sessionDataPath as string | undefined) ??
-      './data/sessions';
-    const headless =
-      (config.headless as boolean | undefined) ?? (this.context?.config.headless as boolean | undefined) ?? true;
-    const puppeteerArgs = (config.puppeteerArgs as string[] | undefined) ??
-      (this.context?.config.puppeteerArgs as string[] | undefined) ?? ['--no-sandbox', '--disable-setuid-sandbox'];
-    const executablePath =
-      (config.executablePath as string | undefined) ?? (this.context?.config.executablePath as string | undefined);
-
     const proxyUrl = config.proxyUrl as string | undefined;
     const proxyType = config.proxyType as 'http' | 'https' | 'socks4' | 'socks5' | undefined;
+
+    // Browser config is this engine's OWN namespace, read from the opaque per-engine blob the
+    // factory supplies via context.config (the `engine` sub-tree in configuration.ts). The
+    // per-call config carries only engine-neutral fields (sessionId, proxy).
+    const engineConfig = (this.context?.config ?? {}) as {
+      sessionDataPath?: string;
+      puppeteer?: { headless?: boolean; args?: string[]; executablePath?: string };
+    };
+    const puppeteer = engineConfig.puppeteer ?? {};
+    const sessionDataPath = engineConfig.sessionDataPath ?? './data/sessions';
+    const headless = puppeteer.headless ?? true;
+    const puppeteerArgs = puppeteer.args ?? ['--no-sandbox', '--disable-setuid-sandbox'];
+    const executablePath = puppeteer.executablePath;
 
     return new WhatsAppWebJsAdapter({
       sessionId,
