@@ -11,7 +11,7 @@ OpenWA sends these system headers with webhook deliveries:
 | `X-OpenWA-Signature` | HMAC-SHA256 signature, present only when the webhook has a secret |
 | `X-OpenWA-Event` | Event name, for example `message.received` |
 | `X-OpenWA-Idempotency-Key` | Stable key for duplicate detection |
-| `X-OpenWA-Delivery-Id` | Unique delivery attempt identifier |
+| `X-OpenWA-Delivery-Id` | Unique identifier for this delivery (stable across retry attempts) |
 | `X-OpenWA-Retry-Count` | Retry count for the current delivery |
 
 The signature format is:

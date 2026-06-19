@@ -83,7 +83,7 @@ export function generateIdempotencyKey(event: string, data: Record<string, unkno
 }
 
 /**
- * Generate a unique delivery ID for each webhook delivery attempt
+ * Generate a unique delivery ID for each webhook delivery (stable across retry attempts)
  */
 export function generateDeliveryId(): string {
   return `dlv_${randomUUID()}`;
