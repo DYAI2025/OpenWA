@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Dashboard collapses connection-error spam into a single toast.** When the backend is unreachable
+  (`failed to fetch`, network errors, HTTP 502/503), the dashboard now shows one translated "Server
+  Connection Lost" toast that auto-dismisses, instead of stacking an error toast per failed request —
+  de-duplicated on a stable key so translation can't break it. Original work by @quinton-8. (#293)
+
 ### Fixed
 
 - **Dashboard no longer crashes ("Something went wrong") when a webhook exists on PostgreSQL.** JSON
