@@ -21,10 +21,7 @@ export function messagesQueryKey(sessionId: string, chatId: string): MessagesQue
  * not through refetches. Cache eviction happens 30 min after the chat stops
  * being observed (gcTime).
  */
-export function useChatMessages(
-  sessionId: string,
-  chatId: string | null,
-): UseQueryResult<ChatMessageView[], Error> {
+export function useChatMessages(sessionId: string, chatId: string | null): UseQueryResult<ChatMessageView[], Error> {
   return useQuery<ChatMessageView[], Error>({
     queryKey: messagesQueryKey(sessionId, chatId ?? ''),
     queryFn: async () => {
@@ -62,16 +59,12 @@ export function useChatMessagesActions() {
       );
     },
     updateMessage(sessionId: string, chatId: string, id: string, patch: Partial<ChatMessageView>) {
-      qc.setQueryData<ChatMessageView[]>(
-        messagesQueryKey(sessionId, chatId),
-        (old = []) => updateMessageById(old, id, patch),
+      qc.setQueryData<ChatMessageView[]>(messagesQueryKey(sessionId, chatId), (old = []) =>
+        updateMessageById(old, id, patch),
       );
     },
     removeMessage(sessionId: string, chatId: string, id: string) {
-      qc.setQueryData<ChatMessageView[]>(
-        messagesQueryKey(sessionId, chatId),
-        (old = []) => removeMessageById(old, id),
-      );
+      qc.setQueryData<ChatMessageView[]>(messagesQueryKey(sessionId, chatId), (old = []) => removeMessageById(old, id));
     },
   };
 }

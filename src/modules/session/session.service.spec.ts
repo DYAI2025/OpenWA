@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { Repository, DataSource, In } from 'typeorm';
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { SessionService, ACK_RECONCILE_DELAY_MS } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageStatus } from '../message/entities/message.entity';
@@ -39,6 +40,7 @@ describe('SessionService', () => {
   let eventsGateway: jest.Mocked<Partial<EventsGateway>>;
   let webhookService: jest.Mocked<Partial<WebhookService>>;
   let hookManager: jest.Mocked<Partial<HookManager>>;
+  let configService: jest.Mocked<Partial<ConfigService>>;
   let mockEngine: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -109,6 +111,10 @@ describe('SessionService', () => {
       execute: jest.fn().mockResolvedValue({ continue: true, data: {} }),
     };
 
+    configService = {
+      get: jest.fn().mockImplementation(<T>(_key: string, def?: T): T => def as T),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SessionService,
@@ -128,6 +134,7 @@ describe('SessionService', () => {
         { provide: EventsGateway, useValue: eventsGateway },
         { provide: WebhookService, useValue: webhookService },
         { provide: HookManager, useValue: hookManager },
+        { provide: ConfigService, useValue: configService },
       ],
     }).compile();
 
@@ -261,7 +268,7 @@ describe('SessionService', () => {
       const result = await service.findAll();
 
       expect(result).toHaveLength(2);
-      expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' } });
+      expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' }, take: 1000, skip: 0 });
     });
 
     it('scopes results to a session-restricted key', async () => {
@@ -272,6 +279,8 @@ describe('SessionService', () => {
       expect(repository.find).toHaveBeenCalledWith({
         where: { id: In(['sess-1', 'sess-2']) },
         order: { createdAt: 'DESC' },
+        take: 1000,
+        skip: 0,
       });
     });
 
@@ -282,8 +291,21 @@ describe('SessionService', () => {
       await service.findAll([]);
 
       expect(repository.find).toHaveBeenCalledTimes(2);
-      expect(repository.find).toHaveBeenNthCalledWith(1, { order: { createdAt: 'DESC' } });
-      expect(repository.find).toHaveBeenNthCalledWith(2, { order: { createdAt: 'DESC' } });
+      expect(repository.find).toHaveBeenNthCalledWith(1, { order: { createdAt: 'DESC' }, take: 1000, skip: 0 });
+      expect(repository.find).toHaveBeenNthCalledWith(2, { order: { createdAt: 'DESC' }, take: 1000, skip: 0 });
+    });
+
+    it('applies bounded pagination to the database query', async () => {
+      (repository.find as jest.Mock).mockResolvedValue([]);
+
+      await service.findAll(['sess-1'], { limit: 5000, offset: -5 });
+
+      expect(repository.find).toHaveBeenCalledWith({
+        where: { id: In(['sess-1']) },
+        order: { createdAt: 'DESC' },
+        take: 1000,
+        skip: 0,
+      });
     });
   });
 
@@ -331,6 +353,45 @@ describe('SessionService', () => {
       await service.start('sess-uuid-1');
       // Engine is now in the map, so a second start is 'already started' (not wedged at 'starting').
       await expect(service.start('sess-uuid-1')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects starting a new session when MAX_CONCURRENT_SESSIONS is reached', async () => {
+      (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T): T | number => {
+        if (key === 'sessions.maxConcurrent') return 1;
+        return def as T;
+      });
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: 'sess-2' }));
+      const engines = (service as unknown as { engines: Map<string, unknown> }).engines;
+      engines.set('sess-1', mockEngine);
+
+      await expect(service.start('sess-2')).rejects.toThrow(/Maximum concurrent sessions reached/);
+      expect(engineFactory.create).not.toHaveBeenCalled();
+    });
+
+    it('does not double-count a still-initializing session against MAX_CONCURRENT_SESSIONS', async () => {
+      (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T): T | number => {
+        if (key === 'sessions.maxConcurrent') return 2;
+        return def as T;
+      });
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: 'sess-2' }));
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (engineFactory.create as jest.Mock).mockClear().mockReturnValue(mockEngine);
+
+      const internals = service as unknown as {
+        engines: Map<string, unknown>;
+        initializingSessions: Set<string>;
+      };
+      // 'sess-1' is mid-initialize: present in BOTH sets (the real overlap window). Deduplicated active
+      // count is 1, below the cap of 2 — so starting 'sess-2' must be allowed. The old summed-size
+      // logic counted it as 2 (engines.size + initializingSessions.size) and would wrongly reject.
+      internals.engines.set('sess-1', mockEngine);
+      internals.initializingSessions.add('sess-1');
+
+      await expect(service.start('sess-2')).resolves.toBeDefined();
+      expect(engineFactory.create).toHaveBeenCalled();
+
+      internals.engines.clear();
+      internals.initializingSessions.clear();
     });
   });
 
@@ -1416,13 +1477,21 @@ describe('SessionService', () => {
   // ── getStats ──────────────────────────────────────────────────────
 
   describe('getStats', () => {
+    const makeStatsQb = (rows: Array<{ status: string; count: string }>) => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue(rows),
+    });
+
     it('should return correct session statistics', async () => {
-      const sessions = [
-        createMockSession({ status: SessionStatus.READY }),
-        createMockSession({ id: 'sess-2', status: SessionStatus.READY }),
-        createMockSession({ id: 'sess-3', status: SessionStatus.DISCONNECTED }),
-      ];
-      (repository.find as jest.Mock).mockResolvedValue(sessions);
+      (repository.createQueryBuilder as jest.Mock) = jest.fn().mockReturnValue(
+        makeStatsQb([
+          { status: SessionStatus.READY, count: '2' },
+          { status: SessionStatus.DISCONNECTED, count: '1' },
+        ]),
+      );
 
       const stats = await service.getStats();
 
@@ -1433,17 +1502,31 @@ describe('SessionService', () => {
       expect(stats.memoryUsage).toBeDefined();
     });
 
+    it('counts every session via a grouped COUNT, not the bounded findAll (no undercount past the cap)', async () => {
+      const findSpy = repository.find as jest.Mock;
+      findSpy.mockClear();
+      (repository.createQueryBuilder as jest.Mock) = jest
+        .fn()
+        .mockReturnValue(makeStatsQb([{ status: SessionStatus.READY, count: '1500' }]));
+
+      const stats = await service.getStats();
+
+      // 1500 > DEFAULT_LIST_LIMIT (1000): the old findAll-based path would have capped total at 1000.
+      expect(stats.total).toBe(1500);
+      expect(stats.ready).toBe(1500);
+      expect(findSpy).not.toHaveBeenCalled();
+    });
+
     it('scopes the stats to a restricted key (active counts only in-scope engines)', async () => {
-      const findSpy = (repository.find as jest.Mock).mockResolvedValue([
-        createMockSession({ id: 'sess-A', status: SessionStatus.READY }),
-      ]);
+      const qb = makeStatsQb([{ status: SessionStatus.READY, count: '1' }]);
+      (repository.createQueryBuilder as jest.Mock) = jest.fn().mockReturnValue(qb);
       const engines = (service as unknown as { engines: Map<string, unknown> }).engines;
       engines.set('sess-A', {});
       engines.set('sess-B', {}); // global engine the scoped key must NOT see counted
 
       const stats = await service.getStats(['sess-A']);
 
-      expect(findSpy).toHaveBeenCalled(); // scope threaded into findAll
+      expect(qb.where).toHaveBeenCalledWith('session.id IN (:...scope)', { scope: ['sess-A'] });
       expect(stats.total).toBe(1);
       expect(stats.active).toBe(1); // not 2 (global engines.size)
       engines.clear();
